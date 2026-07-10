@@ -1,0 +1,44 @@
+{
+  "name": "queuectl",
+  "version": "1.0.0",
+  "description": "A CLI-based background job queue system built with Node.js, MongoDB, and Mongoose.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "queuectl": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node --check src/index.js && node --check src/commands/index.js && node --check src/commands/config.command.js && node --check src/commands/dashboard.command.js && node --check src/commands/dlq.command.js && node --check src/commands/enqueue.command.js && node --check src/commands/list.command.js && node --check src/commands/metrics.command.js && node --check src/commands/status.command.js && node --check src/commands/worker.command.js && node --check src/dashboard/dashboard-app.js && node --check src/database/connection.js && node --check src/models/job.model.js && node --check src/models/config.model.js && node --check src/models/worker.model.js && node --check src/services/config.service.js && node --check src/services/dlq.service.js && node --check src/services/job-lease.service.js && node --check src/services/job-output-log.service.js && node --check src/services/job-recovery.service.js && node --check src/services/job.service.js && node --check src/services/metrics.service.js && node --check src/services/retry.service.js && node --check src/services/status.service.js && node --check src/services/worker-control.service.js && node --check src/services/worker-registry.service.js && node --check src/services/worker.service.js && node --check src/workers/executor.js && node --check src/workers/worker-loop.js && node --check src/workers/worker-process.js && node --check src/workers/worker-runtime.js && node --check src/workers/worker-supervisor.js && node --check src/utils/env.js && node --check src/utils/logger.js && node --check src/constants/app.constants.js && node --check src/constants/config.constants.js && node --check src/constants/job.constants.js && node --check src/constants/worker.constants.js",
+    "test": "node --test",
+    "test:jest": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "validate:e2e": "bash scripts/validate-e2e.sh"
+  },
+  "keywords": [
+    "cli",
+    "queue",
+    "jobs",
+    "mongodb",
+    "mongoose"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "ejs": "^6.0.1",
+    "express": "^5.2.1",
+    "mongoose": "^9.7.4",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2"
+  }
+}
