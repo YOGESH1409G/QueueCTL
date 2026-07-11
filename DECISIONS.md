@@ -4,133 +4,175 @@ This document answers the internship assignment decision questions for the Queue
 
 ---
 
-## Which exact code prevents duplicate execution?
+## 1. Which exact line(s) prevent two workers from claiming the same job, and why is that operation atomic across separate OS processes?
 
-Duplicate execution is prevented by a single atomic MongoDB `findOneAndUpdate()` in `WorkerLoop.claimNextJob()` (`src/workers/worker-loop.js`).
+The prevention lives in **`src/workers/worker-loop.js`, lines 153–175**, inside `claimNextJob()`:
 
-The update only succeeds when all of these are true at claim time:
+```javascript
+const job = await this.jobModel
+  .findOneAndUpdate(                          // line 154 — the atomic gate
+    {
+      state: JOB_STATES.PENDING,              // line 156 — only match unclaimed jobs
+      nextRetryAt: { $lte: now },             // line 157 — respect retry schedule
+      $or: [{ runAt: null }, { runAt: { $lte: now } }], // line 158 — respect scheduled time
+    },
+    {
+      $set: {
+        state: JOB_STATES.PROCESSING,         // line 162 — atomically transition to claimed
+        claimedByWorkerId: this.workerId,      // line 165 — stamp owner
+        leaseExpiresAt,                        // line 166 — start the lease clock
+      },
+    },
+    {
+      sort: { priorityRank: 1, createdAt: 1 }, // line 172 — deterministic job selection
+    }
+  )
+  .exec();
+```
 
-- `state = pending`
-- `nextRetryAt <= now`
-- `runAt` is null or `runAt <= now`
+**Why this is atomic across separate OS processes:**
 
-The update atomically transitions exactly one matching document to `processing` and sets:
+MongoDB executes `findOneAndUpdate` as a **single atomic server-side operation** — the filter, the update, and the document return happen in one step, protected by MongoDB's internal document-level write lock.
 
-- `startedAt`
-- `claimedByWorkerId`
-- `leaseExpiresAt`
+Because the operation runs on the MongoDB server (not inside the Node.js process), it doesn't matter whether two workers are:
+- threads in the same process,
+- separate Node.js processes on the same machine (`--count 3` forks), or
+- separate machines pointing at the same MongoDB cluster.
 
-MongoDB guarantees that only one worker process can win the update for a given job document. There is no read-modify-write race because claim and state transition happen in one database operation.
+The first worker to reach the MongoDB server wins the document lock. The second worker's `findOneAndUpdate` runs after the first one commits, finds `state = "processing"` (no longer `"pending"`), and returns `null` — so it never executes the job. There is no read-then-write window, no compare-and-swap, no advisory lock needed.
 
-Equivalent guarantee in SQL terms: this is an atomic `UPDATE ... WHERE state='pending' ... LIMIT 1` inside a single database transaction.
-
----
-
-## How crash recovery works after SIGKILL?
-
-SIGKILL cannot be handled by Node.js. When a worker is killed with SIGKILL:
-
-1. The worker stops immediately with no cleanup.
-2. The job remains in `processing`, but its `leaseExpiresAt` stops being renewed.
-3. Another worker's poll loop calls `JobRecoveryService.recoverStuckJobs()` on every iteration.
-4. Recovery selects jobs where:
-   - `state = processing`
-   - and either `leaseExpiresAt <= now`
-   - or legacy fallback: `leaseExpiresAt` is null and `startedAt` is older than `stuckJobTimeoutMs`
-5. Recovered jobs are moved back to `pending` with:
-   - `nextRetryAt = now`
-   - lease fields cleared
-   - `attempts` incremented
-   - an explanatory `error` message
-
-Recovery also runs on worker startup, so a full process restart still heals stale jobs.
-
-Worker heartbeats are separate: `WorkerRegistryService.cleanStaleWorkers()` marks dead worker records as `stopped`, but job recovery is driven by job lease expiry, not only worker heartbeat loss.
+This is the **same guarantee as `SELECT ... FOR UPDATE SKIP LOCKED`** in PostgreSQL — atomicity is enforced by the database server, not by application-level coordination.
 
 ---
 
-## Worst-case recovery delay
+## 2. A worker is SIGKILL'd halfway through a job. Walk through, step by step, what state the job is in and how it eventually runs again. What is the worst-case delay before recovery?
 
-Default configuration:
+### Step-by-step state walkthrough
 
-- `jobLeaseMs = 30_000` (30 seconds)
-- worker poll interval = `1_000` ms (1 second)
+| Step | What Happens | Job State |
+|------|--------------|-----------|
+| 1 | Worker claims the job | `processing` — `claimedByWorkerId` set, `leaseExpiresAt` = now + 30s |
+| 2 | Worker executes the shell command | `processing` — lease heartbeat renews `leaseExpiresAt` every ~10s |
+| 3 | `kill -9 <pid>` sent mid-execution | `processing` — process dies instantly, no cleanup possible |
+| 4 | `leaseExpiresAt` clock keeps ticking | `processing` — nobody renews the lease because the worker is gone |
+| 5 | Lease expires (up to 30s later) | `processing` — job is now eligible for recovery |
+| 6 | A new worker starts (or existing worker's poll fires) | `JobRecoveryService.recoverStuckJobs()` runs |
+| 7 | Recovery query finds the expired-lease job | `pending` — `attempts` incremented, lease cleared, `nextRetryAt = now` |
+| 8 | Worker's next poll claims the recovered job | `processing` → `completed` or `failed` |
 
-Worst case timeline after SIGKILL:
+**The exact recovery query** (`src/services/job-recovery.service.js`):
+```javascript
+{ state: 'processing', leaseExpiresAt: { $lte: now } }
+```
+Jobs matching this are moved back to `pending` with `attempts++`.
 
-1. Worker dies immediately after renewing a lease.
-2. Job remains `processing` until `leaseExpiresAt`.
-3. Another worker discovers the expired lease on its next poll.
+### Worst-case delay calculation
 
-Worst-case delay:
+```
+jobLeaseMs         = 30,000 ms  (last renewal just happened before SIGKILL)
++ poll interval    =  1,000 ms  (recovery runs on the next poll tick)
+─────────────────────────────
+Worst case         ≈ 31,000 ms  (~31 seconds)
+```
 
-`jobLeaseMs + pollIntervalMs = ~31 seconds`
+This is **well within the required 60-second bound.**
 
-This is under the required 60-second bound.
-
-Configurable upper bound remains capped at `55_000` ms for `jobLeaseMs`, so worst-case recovery stays below 60 seconds with default polling.
-
----
-
-## Should DLQ retry reset attempts? Why?
-
-Yes. `retryDeadJob()` in `src/services/dlq.service.js` resets `attempts` to `0`.
-
-Reason:
-
-- A manual DLQ retry is an operator-driven requeue, not an automatic retry of the same failure chain.
-- Resetting attempts gives the job a fresh retry budget and avoids immediate re-dead-lettering on the first failure.
-- The job still keeps its original `maxRetries` snapshot from enqueue time.
-- Lease and processing metadata are also cleared so the job re-enters the queue cleanly.
-
-Automatic worker retries do not reset attempts; only manual DLQ recovery does.
+`jobLeaseMs` is configurable but is capped at `55,000 ms` in the validation layer, so worst-case recovery always stays below 60 seconds with default polling.
 
 ---
 
-## Worker stop design choices
+## 3. Does `dlq retry` reset `attempts`? Why is that the right call?
 
-QueueCTL uses two complementary mechanisms:
+**Yes.** `retryDeadJob()` in `src/services/dlq.service.js` resets `attempts` to `0`.
 
-### 1. PID file (`.queuectl/worker.pid`)
+### Why resetting is the right call
 
-Written when a foreground worker (`--count 1`) or supervisor (`--count > 1`) starts.
+A job reaches the DLQ because it failed `maxRetries + 1` times. At that point its `attempts` counter equals `maxRetries + 1`.
 
-`queuectl worker stop` reads this file and sends `SIGTERM` to the recorded PID. This enables cross-terminal shutdown without needing the original shell session.
+If `dlq retry` did **not** reset attempts, the job would re-enter the queue with `attempts` already at the limit. The very first failure after the DLQ retry would find `shouldRetry()` returning `false` (because `attempts > maxRetries`) and the job would immediately return to the DLQ — giving the operator zero actual retry budget. This would make `dlq retry` functionally useless.
 
-### 2. MongoDB worker registry stop flag
+By resetting `attempts = 0`:
+- The job gets a **fresh, full retry budget** — the operator's intent when they manually trigger a retry.
+- It distinguishes a **manual, operator-driven requeue** from the automatic failure chain.
+- The job still retains its original `maxRetries` snapshot from enqueue time — so the policy still applies, just from a clean slate.
 
-`WorkerRegistryService.requestStop()` sets `stopRequestedAt` on active workers.
-
-The worker loop checks `shouldStop()` before each poll. This provides a database-backed stop signal in addition to OS signals.
-
-### Graceful shutdown behavior
-
-- `SIGINT` / `SIGTERM`: worker stops claiming new jobs, finishes the current command, persists final state, marks worker stopped, removes PID file, disconnects MongoDB.
-- `queuectl worker stop`: sends `SIGTERM` to the PID file process and marks active workers for stop in MongoDB.
-- `SIGKILL`: intentionally unsupported for graceful shutdown; simulates crash and relies on lease recovery.
-
-Foreground mode (`--count 1`) runs the worker in the current terminal process instead of forking, which satisfies the assignment's foreground worker requirement while preserving multi-worker mode via supervisor fork.
+**Automatic worker retries** (mid-failure-chain) do **not** reset `attempts` — only DLQ recovery does. This distinction is intentional: automatic retries are part of the same failure chain; DLQ retries are a human decision to give the job another chance.
 
 ---
 
-## Future priority queue design
+## 4. What designs did you consider and reject for `worker stop` (cross-process signaling), and why?
 
-Current priority support is already persisted on each job:
+QueueCTL uses two complementary mechanisms: a **PID file** and a **MongoDB stop flag**. Here is why several alternatives were considered and rejected:
 
-- `priority`: `HIGH | MEDIUM | LOW`
-- `priorityRank`: numeric sort key
+### Rejected: Named pipes / Unix sockets
 
-Claim order today:
+**Considered:** Open a named socket (`/tmp/queuectl.sock`) so `worker stop` could send a message directly to the running worker process.
 
-1. lowest `priorityRank` first
-2. oldest `createdAt` within the same priority band
+**Rejected because:**
+- Requires the socket file to be created by the running worker at startup and cleaned up on exit — fragile on crash.
+- Only works on the same machine; breaks in containerized or distributed deployments.
+- Adds file-descriptor management and cleanup complexity with no meaningful benefit over SIGTERM.
 
-Future improvements without breaking the CLI:
+### Rejected: In-memory shared state / `SharedArrayBuffer`
 
-1. Add optional weighted fair queueing per tenant or queue name.
-2. Add `queueName` to jobs with compound indexes like `{ queueName, state, priorityRank, createdAt }`.
-3. Support delayed priority escalation, e.g. promote long-waiting `LOW` jobs after N minutes.
-4. Add a dedicated `queuectl promote <jobId>` command for manual priority changes.
-5. Keep atomic claim semantics unchanged: priority should affect sort order in the claim query, not introduce pre-read races.
+**Considered:** Use a shared memory segment or `SharedArrayBuffer` to set a "stop" flag that worker threads/processes could poll.
 
-The existing `findOneAndUpdate({ state: pending, ... }, ..., { sort })` pattern scales to richer priority rules as long as sorting remains part of the atomic claim operation.
+**Rejected because:**
+- Node.js worker threads share memory but OS-forked child processes do not — each `fork()` gets a separate memory space.
+- Would require migrating to `worker_threads` instead of `child_process.fork()`, which changes the entire process isolation model.
+- Doesn't survive process restarts at all.
+
+### Rejected: HTTP endpoint on the worker
+
+**Considered:** Workers could expose a local HTTP server; `worker stop` would `POST /stop` to it.
+
+**Rejected because:**
+- Requires port management, port conflict detection, and cleanup on crash.
+- Adds a server-side attack surface to what is intentionally a CLI tool.
+- Overly complex for a problem that SIGTERM already solves cleanly.
+
+### Rejected: Polling a local file flag
+
+**Considered:** `worker stop` writes a `.stop` file; workers poll the filesystem every second.
+
+**Rejected because:**
+- Redundant given MongoDB is already the source of truth.
+- Adds a second stateful artifact (file) that must be cleaned up and can desync from database state.
+- No benefit over the MongoDB registry stop flag, which already provides the same polling mechanism with richer metadata.
+
+### What was chosen and why
+
+| Mechanism | Reason |
+|-----------|--------|
+| **PID file + SIGTERM** | Instant, OS-native, works across terminal sessions, requires no additional infrastructure |
+| **MongoDB `stopRequestedAt` flag** | Survives cases where PID file is stale; provides a database-backed stop signal visible to all workers; enables graceful stop of distributed workers |
+
+Foreground mode (`--count 1`) runs directly in the current process, so `Ctrl+C` (`SIGINT`) is the natural stop mechanism — no PID file needed.
+
+---
+
+## 5. If priorities were added tomorrow (high-priority jobs jump the queue), which parts of your design survive unchanged and which break?
+
+### What survives unchanged ✅
+
+| Component | Why it survives |
+|-----------|-----------------|
+| **Atomic claim query** | The `sort: { priorityRank: 1, createdAt: 1 }` is already in the `findOneAndUpdate` call. Adding or changing priority rules is a sort-key change only — no new locks, no race conditions introduced. |
+| **`priority` and `priorityRank` fields** | Both fields already exist on every job document. `HIGH=1, MEDIUM=2, LOW=3` is already persisted and indexed. |
+| **MongoDB index** | The compound index `{ state, nextRetryAt, priorityRank, createdAt }` already covers priority-aware claiming. |
+| **Job schema and model** | No migration needed — `priority` and `priorityRank` are already part of the Mongoose schema with validation. |
+| **CLI enqueue payload** | `{"command":"...", "priority":"HIGH"}` already works today. |
+| **Worker loop** | Workers already use the priority-sorted claim query — no code change needed to make high-priority jobs jump the queue. |
+
+### What breaks or needs attention ⚠️
+
+| Component | Why it breaks / needs change |
+|-----------|------------------------------|
+| **`dlq retry`** | Today it requeues with `nextRetryAt = now` but does not preserve or elevate priority. A retried dead job re-enters at its original priority, which might be correct — but if the intent is "urgent retry", there is no mechanism to escalate priority on DLQ retry without a code change. |
+| **`worker stop` graceful drain** | If a high-priority job arrives while a worker is draining (has set `isRunning = false`), the worker will finish its current job and then exit — the high-priority job will sit pending until a new worker starts. There is no "priority preemption" in the current graceful shutdown path. |
+| **`status` and `metrics` display** | Currently shows counts by state only. If priority SLAs matter (e.g., "all HIGH jobs must start within 5s"), there is no per-priority latency metric today — this would need to be added to `MetricsService`. |
+| **Starvation of LOW jobs** | If HIGH jobs arrive continuously, LOW jobs can wait indefinitely because the claim query always takes the lowest `priorityRank` first. A weighted fair-queue or aging mechanism (promote LOW jobs after N minutes) would need to be added to prevent starvation. |
+
+### Summary
+
+The **core atomicity guarantee is completely unaffected** — priority is just a sort key in the atomic claim. What breaks is higher-level policy: starvation prevention, priority-aware draining, and SLA observability. These are addable without redesigning the worker loop or data model.
