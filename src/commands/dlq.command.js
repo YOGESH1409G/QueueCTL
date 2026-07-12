@@ -33,7 +33,24 @@ export async function listDlqAction(options) {
   try {
     await connectDatabase({ log: false });
     const jobs = await listDeadJobs({ limit: options.limit });
-    renderDeadJobs(jobs);
+
+    if (options.json) {
+      process.stdout.write(
+        JSON.stringify(
+          jobs.map((j) => ({
+            jobId: j.jobId,
+            command: j.command,
+            state: j.state,
+            attempts: j.attempts,
+            error: j.error,
+            updatedAt: j.updatedAt,
+            createdAt: j.createdAt,
+          }))
+        ) + '\n'
+      );
+    } else {
+      renderDeadJobs(jobs);
+    }
   } catch (error) {
     logger.error(formatMongoError(error));
     process.exitCode = 1;
@@ -64,6 +81,7 @@ export function registerDlqCommand(program) {
     .command('list')
     .description('List jobs in the dead-letter queue.')
     .option('-l, --limit <number>', 'Maximum jobs to return.', '25')
+    .option('--json', 'Output jobs as a JSON array to stdout.')
     .action(listDlqAction);
 
   dlqCommand
