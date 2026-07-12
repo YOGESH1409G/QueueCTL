@@ -8,7 +8,12 @@ It supports enqueueing shell commands, multi-worker processing, MongoDB-backed r
 
 ## Tech Stack
 
-
+- Node.js
+- MongoDB + Mongoose
+- Commander.js
+- Winston
+- Express
+- child_process
 
 ## Architecture
 
