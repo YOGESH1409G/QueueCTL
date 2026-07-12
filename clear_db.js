@@ -1,22 +1,19 @@
-
 import mongoose from 'mongoose';
-import 'dotenv/config';
-import { Job } from './src/models/job.model.js';
+import { connectDatabase, disconnectDatabase } from './src/database/connection.js';
 
-const clear = async () => {
+async function clearDatabase() {
   try {
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('Connected to MongoDB');
-
-    const result = await Job.deleteMany({});
-    console.log('Deleted', result.deletedCount, 'jobs');
-
+    await connectDatabase({ log: true });
+    
+    // Drop the entire database to ensure all collections (jobs, configs, etc) are wiped clean
+    await mongoose.connection.db.dropDatabase();
+    
+    console.log('✅ Successfully deleted all data from MongoDB.');
   } catch (error) {
-    console.error('Error clearing database:', error);
+    console.error('❌ Failed to clear database:', error.message);
   } finally {
-    await mongoose.disconnect();
-    console.log('Disconnected from MongoDB');
+    await disconnectDatabase({ log: false });
   }
-};
+}
 
-clear();
+clearDatabase();

@@ -38,6 +38,7 @@ export function parseEnqueuePayload(rawPayload) {
   }
 
   return {
+    id: payload.id,
     command: payload.command.trim(),
     timeout: payload.timeout,
     priority: payload.priority,

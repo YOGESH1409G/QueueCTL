@@ -118,7 +118,7 @@ export async function createJob(payload) {
   const runAt = normalizeRunAt(payload.runAt);
 
   const job = await Job.create({
-    jobId: randomUUID(),
+    jobId: payload.id ? String(payload.id).trim() : randomUUID(),
     command: payload.command.trim(),
     state: JOB_STATES.PENDING,
     priority,

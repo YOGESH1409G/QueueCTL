@@ -59,12 +59,15 @@ function toIsoDate(value) {
 
 export function serializeJobsForJson(jobs) {
   return jobs.map((job) => ({
-    jobId: job.jobId,
+    id: job.jobId,
     command: job.command,
     state: job.state,
-    priority: job.priority,
     attempts: job.attempts,
-    maxRetries: job.maxRetries,
+    max_retries: job.maxRetries,
+    created_at: toIsoDate(job.createdAt),
+    updated_at: toIsoDate(job.updatedAt),
+    // Optional extensions beyond the required fields:
+    priority: job.priority,
     executionDuration: job.executionDuration ?? null,
     timedOut: Boolean(job.timedOut),
     exitCode: job.exitCode ?? null,
@@ -75,8 +78,6 @@ export function serializeJobsForJson(jobs) {
     runAt: toIsoDate(job.runAt),
     startedAt: toIsoDate(job.startedAt),
     completedAt: toIsoDate(job.completedAt),
-    createdAt: toIsoDate(job.createdAt),
-    updatedAt: toIsoDate(job.updatedAt),
   }));
 }
 

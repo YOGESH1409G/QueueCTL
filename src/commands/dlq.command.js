@@ -38,13 +38,14 @@ export async function listDlqAction(options) {
       process.stdout.write(
         JSON.stringify(
           jobs.map((j) => ({
-            jobId: j.jobId,
+            id: j.jobId,
             command: j.command,
             state: j.state,
             attempts: j.attempts,
+            max_retries: j.maxRetries,
+            created_at: j.createdAt?.toISOString() ?? null,
+            updated_at: j.updatedAt?.toISOString() ?? null,
             error: j.error,
-            updatedAt: j.updatedAt,
-            createdAt: j.createdAt,
           }))
         ) + '\n'
       );
