@@ -5,7 +5,7 @@ import { registerEnqueueCommand } from './enqueue.command.js';
 import { registerListCommand } from './list.command.js';
 import { registerMetricsCommand } from './metrics.command.js';
 import { registerStatusCommand } from './status.command.js';
-import { registerWorkerCommand } from './worker.command.js';
+import { registerWorkerCommand } from './worker.command.js';//start stop the worker process
 
 export function registerCommands(program) {
   registerConfigCommand(program);
