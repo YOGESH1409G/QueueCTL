@@ -62,12 +62,11 @@ function renderJobsTable(jobs, includeRetry = false) {
         <td>${escapeHtml(job.executionDuration ?? '-')}</td>
         <td>${escapeHtml(job.command)}</td>
         <td>${escapeHtml(job.createdAt?.toISOString?.() || job.createdAt || '-')}</td>
-        ${
-          includeRetry
-            ? `<td><form method="post" action="/dlq/${escapeHtml(
-                job.jobId
-              )}/retry"><button class="btn btn-sm btn-primary">Retry</button></form></td>`
-            : ''
+        ${includeRetry
+          ? `<td><form method="post" action="/dlq/${escapeHtml(
+            job.jobId
+          )}/retry"><button class="btn btn-sm btn-primary">Retry</button></form></td>`
+          : ''
         }
       </tr>`
     )
@@ -75,9 +74,8 @@ function renderJobsTable(jobs, includeRetry = false) {
 
   return `<div class="table-responsive"><table class="table table-sm table-striped align-middle">
     <thead><tr>
-      <th>Job ID</th><th>State</th><th>Priority</th><th>Attempts</th><th>Duration</th><th>Command</th><th>Created</th>${
-        includeRetry ? '<th>Action</th>' : ''
-      }
+      <th>Job ID</th><th>State</th><th>Priority</th><th>Attempts</th><th>Duration</th><th>Command</th><th>Created</th>${includeRetry ? '<th>Action</th>' : ''
+    }
     </tr></thead>
     <tbody>${rows || `<tr><td colspan="${includeRetry ? 8 : 7}" class="text-muted">No jobs found.</td></tr>`}</tbody>
   </table></div>`;
@@ -129,12 +127,12 @@ export function createDashboardApp() {
           `<h1 class="mb-4">Jobs</h1>
           <form class="row g-2 mb-3">
             <div class="col-md-4"><input class="form-control" name="search" placeholder="Search" value="${escapeHtml(
-              req.query.search || ''
-            )}"></div>
+            req.query.search || ''
+          )}"></div>
             <div class="col-md-3"><select class="form-select" name="state"><option value="">All states</option>${JOB_STATE_VALUES.map(
-              (state) =>
-                `<option value="${state}" ${req.query.state === state ? 'selected' : ''}>${state}</option>`
-            ).join('')}</select></div>
+            (state) =>
+              `<option value="${state}" ${req.query.state === state ? 'selected' : ''}>${state}</option>`
+          ).join('')}</select></div>
             <div class="col-md-2"><button class="btn btn-dark w-100">Filter</button></div>
           </form>
           ${renderJobsTable(visibleJobs)}`
@@ -170,11 +168,11 @@ export function createDashboardApp() {
           'Metrics',
           `<h1 class="mb-4">Metrics</h1><div class="row row-cols-2 row-cols-md-3 g-3">
             ${Object.entries(metrics)
-              .filter(([, value]) => !Array.isArray(value))
-              .map(([key, value]) =>
-                card(key, typeof value === 'number' ? value.toFixed(2) : value ?? '-')
-              )
-              .join('')}
+            .filter(([, value]) => !Array.isArray(value))
+            .map(([key, value]) =>
+              card(key, typeof value === 'number' ? value.toFixed(2) : value ?? '-')
+            )
+            .join('')}
           </div>`
         )
       );
