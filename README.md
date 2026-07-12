@@ -1,6 +1,6 @@
 # QueueCTL
 
-**[🎥 Watch the Demo Video Here](https://drive.google.com/file/d/1y1fT13SxyA7MO0Q2lYIX9zxQOTwpV_m0/view?usp=sharing)** *(Replace `#` with your actual video link)*
+**[🎥 Watch the Demo Video Here](https://drive.google.com/file/d/1y1fT13SxyA7MO0Q2lYIX9zxQOTwpV_m0/view?usp=sharing)** 
 
 QueueCTL is a highly-scalable, production-minded CLI background job queue built with Node.js, MongoDB, Mongoose, Commander.js, and `child_process`. 
 
